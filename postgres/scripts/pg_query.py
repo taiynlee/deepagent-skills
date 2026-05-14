@@ -2,6 +2,7 @@
 """
 PostgreSQL Natural Language Query Tool
 透過 OpenAI 將自然語言轉換為 SQL 並執行
+支援：查詢、新增、修改、刪除、建立資料表等
 """
 
 import os
@@ -9,18 +10,37 @@ import sys
 import json
 import argparse
 import re
-from typing import Optional
+from typing import Optional, List, Dict, Any
 
 try:
     import psycopg2
     from psycopg2.extras import RealDictCursor
+    HAS_PSYCOPG2 = True
 except ImportError:
-    print("請先安裝 psycopg2-binary: pip install psycopg2-binary", file=sys.stderr)
-    sys.exit(1)
+    HAS_PSYCOPG2 = False
 
+def load_env_file():
+    """自動載入同目錄下的 .env 檔案"""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    env_path = os.path.join(script_dir, '..', '.env')
+    if os.path.exists(env_path):
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    key, value = line.split('=', 1)
+                    os.environ.setdefault(key.strip(), value.strip())
+
+load_env_file()  # 程式啟動時自動載入
+
+def require_psycopg2():
+    if not HAS_PSYCOPG2:
+        print("請先安裝 psycopg2-binary: pip install psycopg2-binary", file=sys.stderr)
+        sys.exit(1)
 
 def get_db_connection():
     """建立資料庫連線"""
+    require_psycopg2()
     return psycopg2.connect(
         host=os.getenv("PG_HOST", "localhost"),
         port=os.getenv("PG_PORT", "5432"),
@@ -38,14 +58,14 @@ def get_table_schema(table_name: Optional[str] = None) -> str:
     
     if table_name:
         cur.execute("""
-            SELECT column_name, data_type, is_nullable, column_default
+            SELECT column_name, data_type, is_nullable, column_default, character_maximum_length
             FROM information_schema.columns
             WHERE table_schema = 'public' AND table_name = %s
             ORDER BY ordinal_position
         """, (table_name,))
     else:
         cur.execute("""
-            SELECT table_name, column_name, data_type
+            SELECT table_name, column_name, data_type, is_nullable
             FROM information_schema.columns
             WHERE table_schema = 'public'
             ORDER BY table_name, ordinal_position
@@ -58,6 +78,36 @@ def get_table_schema(table_name: Optional[str] = None) -> str:
     return json.dumps(rows, indent=2, default=str)
 
 
+def get_database_schema() -> Dict[str, Any]:
+    """取得完整資料庫 schema"""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    
+    # 取得所有表
+    cur.execute("""
+        SELECT table_name 
+        FROM information_schema.tables 
+        WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+        ORDER BY table_name
+    """)
+    tables = [r[0] for r in cur.fetchall()]
+    
+    schema = {}
+    for table in tables:
+        cur.execute("""
+            SELECT column_name, data_type, is_nullable, column_default
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = %s
+            ORDER BY ordinal_position
+        """, (table,))
+        schema[table] = [dict(r) for r in cur.fetchall()]
+    
+    cur.close()
+    conn.close()
+    
+    return schema
+
+
 def generate_sql(nl_query: str, table_name: Optional[str] = None, openai_key: Optional[str] = None) -> str:
     """使用 OpenAI 將自然語言轉換為 SQL"""
     api_key = openai_key or os.getenv("OPENAI_API_KEY")
@@ -65,13 +115,25 @@ def generate_sql(nl_query: str, table_name: Optional[str] = None, openai_key: Op
         return "-- 錯誤: 請設定 OPENAI_API_KEY 環境變數"
     
     # 取得 schema
-    schema = get_table_schema(table_name)
+    if table_name:
+        schema = {table_name: json.loads(get_table_schema(table_name))}
+    else:
+        schema = get_database_schema()
+    
+    schema_str = json.dumps(schema, indent=2, default=str)
     
     # 建立 prompt
-    prompt = f"""將以下自然語言轉換為 PostgreSQL SQL 語句。只輸出 SQL，不要其他解釋。
+    prompt = f"""你是一個 PostgreSQL SQL 專家。根據以下資料庫結構，將自然語言轉換為 PostgreSQL SQL 語句。
 
-可用資料表結構:
-{schema}
+重要規則：
+1. 只輸出 SQL 語句，不要有任何其他解釋或文字
+2. 如果是 SELECT 查詢，可加上 LIMIT，除非查詢中明確說明不限筆數
+3. 如果是建立表格，需要包含 PRIMARY KEY
+4. 字串值使用單引號 ' '
+5. 欄位名稱使用雙引號 " " 如果包含特殊字元
+
+資料庫結構:
+{schema_str}
 
 自然語言查詢: {nl_query}
 
@@ -118,6 +180,12 @@ def execute_sql(sql: str) -> tuple:
     
     if not sql or sql.startswith("--"):
         return [], sql, "無有效 SQL"
+    
+    # 安全檢查 - 禁止危險操作
+    dangerous = ['DROP DATABASE', 'TRUNCATE', 'pg_', 'information_schema']
+    for d in dangerous:
+        if d in sql.upper() and d != 'information_schema':
+            return [], sql, f"安全警告: 不允許執行 {d}"
     
     conn = get_db_connection()
     cur = conn.cursor()
@@ -167,7 +235,30 @@ def format_results(rows: list) -> str:
     return "\n".join(str(r) for r in rows)
 
 
+def format_schema(data: list, title: str = "Schema") -> str:
+    """格式化 schema 輸出"""
+    lines = [f"=== {title} ==="]
+    if isinstance(data, dict):
+        for table, columns in data.items():
+            lines.append(f"\n[{table}]")
+            for col in columns:
+                nullable = "NULL" if col.get("is_nullable") == "YES" else "NOT NULL"
+                default = f"DEFAULT {col['column_default']}" if col.get("column_default") else ""
+                length = f"({col['character_maximum_length']})" if col.get("character_maximum_length") else ""
+                lines.append(f"  {col['column_name']:20} {col['data_type']}{length:15} {nullable:8} {default}")
+    else:
+        for col in data:
+            nullable = "NULL" if col["is_nullable"] == "YES" else "NOT NULL"
+            default = f"DEFAULT {col['column_default']}" if col.get("column_default") else ""
+            lines.append(f"  {col['column_name']:20} {col['data_type']:20} {nullable}")
+    return "\n".join(lines)
+
+
 def main():
+    if not HAS_PSYCOPG2:
+        print("請先安裝 psycopg2-binary: pip install psycopg2-binary", file=sys.stderr)
+        sys.exit(1)
+    
     parser = argparse.ArgumentParser(description="PostgreSQL Natural Language Query")
     parser.add_argument("query", nargs="?", help="自然語言查詢")
     parser.add_argument("--table", "-t", help="指定資料表")
@@ -182,55 +273,41 @@ def main():
     # 描述模式
     if args.describe and args.table:
         schema = get_table_schema(args.table)
-        print(f"=== {args.table} 結構 ===")
-        data = json.loads(schema)
-        for col in data:
-            nullable = "NULL" if col["is_nullable"] == "YES" else "NOT NULL"
-            default = f" DEFAULT {col['column_default']}" if col["column_default"] else ""
-            print(f"  {col['column_name']:20} {col['data_type']:20} {nullable}{default}")
+        print(format_schema(json.loads(schema), f"{args.table} 結構"))
         return
     
     # Schema 模式
     if args.schema:
-        schema = get_table_schema()
-        data = json.loads(schema)
-        tables = {}
-        for row in data:
-            t = row["table_name"]
-            if t not in tables:
-                tables[t] = []
-            tables[t].append(f"    {row['column_name']}: {row['data_type']}")
-        
-        print("=== 資料庫 Schema ===")
-        for t, cols in tables.items():
-            print(f"\n{t}")
-            print("\n".join(cols))
+        schema = get_database_schema()
+        print(format_schema(schema, "資料庫 Schema"))
         return
     
-    # 一般查詢
+    # 需要自然語言查詢
     if not args.query:
-        print("請提供自然語言查詢")
+        parser.print_help()
+        print("\n範例:")
+        print('  pg_query.py "找出所有年齡大於 30 歲的用戶"')
+        print('  pg_query.py "在 users 表新增 name=John, age=25"')
+        print('  pg_query.py --describe users')
+        print('  pg_query.py --schema')
         return
     
-    # 加上 LIMIT
-    nl_with_limit = args.query
-    if args.limit and args.limit > 0:
-        nl_with_limit += f" (limit {args.limit})"
+    # 生成 SQL
+    sql = generate_sql(args.query, args.table, args.api_key)
     
-    # 產生 SQL
-    sql = generate_sql(nl_with_limit, args.table, args.api_key)
+    print(f"=== 生成的 SQL ===")
+    print(sql)
     
     if args.dry_run:
-        print(sql)
         return
     
-    # 執行
-    rows, _, msg = execute_sql(sql)
-    print(f"-- SQL: {sql}")
-    print(f"-- {msg}")
+    print(f"\n=== 執行結果 ===")
+    rows, executed_sql, msg = execute_sql(sql)
     
     if rows:
-        print("\n" + format_results(rows))
+        print(format_results(rows))
+    
+    print(f"\n{msg}")
 
 
 if __name__ == "__main__":
