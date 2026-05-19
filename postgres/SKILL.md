@@ -5,13 +5,17 @@ description: PostgreSQL 資料庫工具。支援查詢、CRUD、資料庫管理�
 
 # PostgreSQL 工具 (postgres)
 
-## 環境設定（已預設）
+## 環境設定
 
-- HOST: active.aiengineerdev.service.paas.wistron.com
-- PORT: 15237
-- USER: dxlab
-- DATABASE: tommy
-- PASSWORD: wistron888
+請在 `.env` 檔案中設定以下變數：
+
+```bash
+DB_HOST=your-database-host
+DB_PORT=5432
+DB_USER=your-username
+DB_NAME=your-database-name
+DB_PASSWORD=your-password
+```
 
 ## 執行方式
 
@@ -20,65 +24,57 @@ description: PostgreSQL 資料庫工具。支援查詢、CRUD、資料庫管理�
 ### 查詢
 
 ```bash
-docker run --rm -e PGPASSWORD=wistron888 postgres:15 \
-  psql -h active.aiengineerdev.service.paas.wistron.com \
-       -p 15237 -U dxlab -d tommy \
-       -c "SELECT * FROM student LIMIT 10"
+docker run --rm -e PGPASSWORD=$DB_PASSWORD postgres:15 \
+  psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME \
+  -c "SELECT * FROM student LIMIT 10"
 ```
 
 ### 統計
 
 ```bash
-docker run --rm -e PGPASSWORD=wistron888 postgres:15 \
-  psql -h active.aiengineerdev.service.paas.wistron.com \
-       -p 15237 -U dxlab -d tommy \
-       -c "SELECT COUNT(*) FROM student"
+docker run --rm -e PGPASSWORD=$DB_PASSWORD postgres:15 \
+  psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME \
+  -c "SELECT COUNT(*) FROM student"
 ```
 
 ### 新增
 
 ```bash
-docker run --rm -e PGPASSWORD=wistron888 postgres:15 \
-  psql -h active.aiengineerdev.service.paas.wistron.com \
-       -p 15237 -U dxlab -d tommy \
-       -c "INSERT INTO student (name, age) VALUES ('Tommy', 30)"
+docker run --rm -e PGPASSWORD=$DB_PASSWORD postgres:15 \
+  psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME \
+  -c "INSERT INTO student (name, age) VALUES ('Tommy', 30)"
 ```
 
 ### 修改
 
 ```bash
-docker run --rm -e PGPASSWORD=wistron888 postgres:15 \
-  psql -h active.aiengineerdev.service.paas.wistron.com \
-       -p 15237 -U dxlab -d tommy \
-       -c "UPDATE student SET name='NewName' WHERE id=1"
+docker run --rm -e PGPASSWORD=$DB_PASSWORD postgres:15 \
+  psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME \
+  -c "UPDATE student SET name='NewName' WHERE id=1"
 ```
 
 ### 刪除
 
 ```bash
-docker run --rm -e PGPASSWORD=wistron888 postgres:15 \
-  psql -h active.aiengineerdev.service.paas.wistron.com \
-       -p 15237 -U dxlab -d tommy \
-       -c "DELETE FROM student WHERE id=5"
+docker run --rm -e PGPASSWORD=$DB_PASSWORD postgres:15 \
+  psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME \
+  -c "DELETE FROM student WHERE id=5"
 ```
 
 ## 管理指令
 
 ```bash
 # 列出所有資料表
-docker run --rm -e PGPASSWORD=wistron888 postgres:15 \
-  psql -h active.aiengineerdev.service.paas.wistron.com \
-       -p 15237 -U dxlab -d tommy -c "\dt"
+docker run --rm -e PGPASSWORD=$DB_PASSWORD postgres:15 \
+  psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -c "\dt"
 
 # 查看錶結構
-docker run --rm -e PGPASSWORD=wistron888 postgres:15 \
-  psql -h active.aiengineerdev.service.paas.wistron.com \
-       -p 15237 -U dxlab -d tommy -c "\d student"
+docker run --rm -e PGPASSWORD=$DB_PASSWORD postgres:15 \
+  psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -c "\d student"
 
 # 查看 schema
-docker run --rm -e PGPASSWORD=wistron888 postgres:15 \
-  psql -h active.aiengineerdev.service.paas.wistron.com \
-       -p 15237 -U dxlab -d tommy -c "\dn"
+docker run --rm -e PGPASSWORD=$DB_PASSWORD postgres:15 \
+  psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -c "\dn"
 ```
 
 ## 常用 SQL 範例
