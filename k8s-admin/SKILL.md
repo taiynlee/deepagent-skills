@@ -13,6 +13,12 @@ description: "Kubernetes 集群管理工具。適用：列出資源、describe �
 - 查看物件詳細資訊
 - 查看 Pod logs
 
+## Agent 名字
+
+| Agent | 名字 |
+|-------|------|
+| k8s_agent | 小雲 |
+
 ## 常用指令
 
 ### 列出資源
